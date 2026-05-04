@@ -1,0 +1,183 @@
+{
+  "theme": "dark",
+  "archetype": "7 (Electric & Neon / Terminal Look)",
+  "app_type": "React Native Expo",
+  "global_styles": {
+    "colors": {
+      "background_primary": "#050505",
+      "background_secondary": "#111111",
+      "surface_panel": "rgba(17, 17, 17, 0.8)",
+      "border_primary": "#00FF41",
+      "border_dim": "rgba(0, 255, 65, 0.15)",
+      "text_primary": "#F3F4F6",
+      "text_secondary": "#A1A1AA",
+      "text_accent": "#00FF41",
+      "status_valid": "#22C55E",
+      "status_invalid": "#EF4444",
+      "status_pending": "#EAB308",
+      "status_checking": "#3B82F6"
+    },
+    "typography": {
+      "font_family_heading": "SpaceMono_700Bold",
+      "font_family_body": "JetBrainsMono_400Regular",
+      "fallback": "System Monospace",
+      "sizes": {
+        "h1": "text-3xl font-bold tracking-tighter",
+        "h2": "text-2xl font-bold tracking-tight",
+        "h3": "text-lg font-semibold",
+        "body": "text-sm md:text-base leading-relaxed",
+        "caption": "text-xs uppercase tracking-[0.1em]"
+      },
+      "rules": "Use monospace fonts exclusively to reinforce the 'terminal/parser' hacker aesthetic. Maintain high contrast."
+    }
+  },
+  "layout_and_spacing": {
+    "padding": {
+      "screen": "p-4",
+      "card": "p-4",
+      "input": "p-3 md:p-4",
+      "widget": "p-5"
+    },
+    "border_radius": {
+      "card": "rounded-none md:rounded-sm",
+      "button": "rounded-sm",
+      "input": "rounded-sm"
+    },
+    "rules": "Avoid large rounded corners. Use sharp edges or minimal 2px/4px rounding to match retro-terminal aesthetics. Utilize subtle 1px neon borders."
+  },
+  "components": {
+    "bottom_navigation": {
+      "background": "#050505",
+      "border_top": "1px solid rgba(0, 255, 65, 0.15)",
+      "active_tint": "#00FF41",
+      "inactive_tint": "#52525B",
+      "style": "Flat solid dark background. Active icons glow slightly using drop-shadow."
+    },
+    "buttons": {
+      "primary": {
+        "background": "rgba(0, 255, 65, 0.1)",
+        "border": "1px solid #00FF41",
+        "text_color": "#00FF41",
+        "style": "Uppercase, tracking-widest. Touch feedback should simulate a terminal keypress (slight scale down + background color fill)."
+      },
+      "secondary": {
+        "background": "transparent",
+        "border": "1px dashed #52525B",
+        "text_color": "#A1A1AA",
+        "style": "Used for secondary actions like 'Clear' or 'Cancel'."
+      },
+      "danger": {
+        "background": "rgba(239, 68, 68, 0.1)",
+        "border": "1px solid #EF4444",
+        "text_color": "#EF4444"
+      }
+    },
+    "inputs": {
+      "text_input": {
+        "background": "#000000",
+        "border": "1px solid #27272A",
+        "text_color": "#00FF41",
+        "focus_border": "#00FF41",
+        "placeholder_color": "#3F3F46"
+      },
+      "parser_area": {
+        "background": "#000000",
+        "min_height": 240,
+        "border": "1px dashed rgba(0, 255, 65, 0.3)",
+        "text_color": "#A1A1AA",
+        "focus_border": "#00FF41",
+        "style": "Allow multiline scroll. Font must be strictly monospace."
+      },
+      "slider": {
+        "track_color": "#27272A",
+        "fill_color": "#00FF41",
+        "thumb_color": "#00FF41"
+      }
+    },
+    "cards": {
+      "account_item": {
+        "background": "#111111",
+        "border_left_width": 3,
+        "border_color_dynamic": "Matches account status (Valid/Invalid/Pending)",
+        "padding": 12,
+        "layout": "Row flex. Left side: Checkbox + UID:Password (password masked). Right side: Status badge."
+      },
+      "stat_widget": {
+        "background": "#111111",
+        "border": "1px solid rgba(0, 255, 65, 0.15)",
+        "layout": "Label on top (caption style), Big dynamic number in the center (text-accent)."
+      }
+    },
+    "badges": {
+      "style": "px-2 py-1 rounded-sm text-[10px] uppercase tracking-wider font-bold border",
+      "valid": "bg-green-500/10 border-green-500 text-green-500",
+      "invalid": "bg-red-500/10 border-red-500 text-red-500",
+      "pending": "bg-yellow-500/10 border-yellow-500 text-yellow-500",
+      "checking": "bg-blue-500/10 border-blue-500 text-blue-500"
+    }
+  },
+  "screens": {
+    "login": {
+      "aesthetic": "Secure Terminal Access",
+      "layout": "Centered form over pure black background. Scanline overlay if possible.",
+      "elements": [
+        "App Logo/Title with monospace 'System Access' subtitle",
+        "Email & Password inputs (JWT)",
+        "Primary Login Button",
+        "Ghost/Secondary Register Button"
+      ]
+    },
+    "parser": {
+      "aesthetic": "Data Extraction Bay",
+      "layout": "Vertical ScrollView.",
+      "elements": [
+        "Large drop/paste zone (parser_area)",
+        "'Extract & Deduplicate' Button",
+        "Live summary panel (e.g., 'Found: 150 | Duplicates Removed: 12')",
+        "Live Preview List (FlatList showing a sample of parsed valid formats)",
+        "'Save to DB' floating/sticky bottom CTA"
+      ]
+    },
+    "accounts_list": {
+      "aesthetic": "Target Database",
+      "layout": "FlatList with a sticky control header.",
+      "elements": [
+        "Control Header: Status filters (All, Valid, Invalid, Pending) and Bulk Checkbox",
+        "Bulk Action Row: Mock Check, Delete, Export",
+        "Account Item Cards",
+        "Mock Check Bottom Sheet: Delay slider (ms), 'Start Check' button, progress ring/bar"
+      ]
+    },
+    "dashboard_stats": {
+      "aesthetic": "Command Center",
+      "layout": "Grid-like widget layout using flex-wrap.",
+      "elements": [
+        "Hero Widget: Total Accounts",
+        "Row Widgets: Valid Count, Invalid Count",
+        "Progress/Ratio Bar (Valid vs Invalid visually represented)",
+        "Recent Activity Log (Terminal-style text list: '[10:45:01] System: 50 accounts checked')"
+      ]
+    }
+  },
+  "interactions_and_motion": {
+    "loading_states": "Use terminal-style loaders (e.g., ASCII spinners ['|', '/', '-', '\\'] or glowing progress bars) instead of generic native circular spinners.",
+    "modals": "Use native BottomSheets (e.g., @gorhom/bottom-sheet) with dark themes and neon borders for editing or running checks.",
+    "press_feedback": "Native touch opacity (activeOpacity 0.7) combined with subtle haptic feedback for primary actions."
+  },
+  "test_attributes": {
+    "rules": "All interactive elements MUST have data-testid or testID (in React Native).",
+    "examples": [
+      "login-email-input",
+      "login-submit-btn",
+      "parser-textarea",
+      "parser-extract-btn",
+      "account-item-{uid}",
+      "mock-check-slider",
+      "bulk-action-delete"
+    ]
+  },
+  "media": {
+    "image_urls": [],
+    "notes": "No external images required. Design relies entirely on color, typography, borders, and UI composition to achieve the Hacker/Terminal aesthetic."
+  }
+}
