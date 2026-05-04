@@ -16,12 +16,14 @@ from typing import List, Optional, Literal
 import bcrypt
 import jwt
 from bson import ObjectId
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, Query, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field
 from contextlib import asynccontextmanager
+
+from fb_extractor import fetch_many, fetch_profile_by_uid, fetch_profile_by_username
 
 
 # ------------------------------------------------------------------
@@ -95,6 +97,12 @@ def serialize_account(acc: dict) -> dict:
         "note": acc.get("note", ""),
         "created_at": acc.get("created_at").isoformat() if acc.get("created_at") else None,
         "checked_at": acc.get("checked_at").isoformat() if acc.get("checked_at") else None,
+        "profile_name": acc.get("profile_name"),
+        "profile_username": acc.get("profile_username"),
+        "profile_pic": acc.get("profile_pic"),
+        "profile_user_id": acc.get("profile_user_id"),
+        "follower_count": acc.get("follower_count"),
+        "enriched_at": acc.get("enriched_at").isoformat() if acc.get("enriched_at") else None,
     }
 
 
@@ -193,8 +201,65 @@ class BulkDeleteIn(BaseModel):
     account_ids: List[str]
 
 
+class EnrichIn(BaseModel):
+    account_ids: Optional[List[str]] = None  # if None — enrich all UID-type pending
+
+
 class ParseIn(BaseModel):
     text: str
+
+
+# ------------------------------------------------------------------
+# Enrichment helpers
+# ------------------------------------------------------------------
+async def enrich_accounts(user_id: str, account_ids: List[ObjectId]) -> int:
+    """Fetch FB profile data for each account that is uid-type and not yet enriched.
+
+    Returns number of accounts that received profile info.
+    """
+    if not account_ids:
+        return 0
+    cursor = db.accounts.find({"_id": {"$in": account_ids}, "user_id": user_id})
+    targets: list[tuple[str, str, str]] = []
+    docs_by_key: dict[str, dict] = {}
+    async for doc in cursor:
+        key = str(doc["_id"])
+        docs_by_key[key] = doc
+        if doc.get("type") == "uid" and doc.get("identifier", "").isdigit():
+            targets.append((key, doc["identifier"], "uid"))
+
+    if not targets:
+        return 0
+
+    try:
+        results = await fetch_many(targets, concurrency=5)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Enrichment batch failed: %s", e)
+        return 0
+
+    updated = 0
+    now = datetime.now(timezone.utc)
+    for key, info in results.items():
+        if not info.get("ok"):
+            continue
+        update: dict = {"enriched_at": now}
+        if info.get("name"):
+            update["profile_name"] = info["name"]
+        if info.get("profile_pic"):
+            update["profile_pic"] = info["profile_pic"]
+        if info.get("username"):
+            update["profile_username"] = info["username"]
+        if info.get("user_id"):
+            update["profile_user_id"] = info["user_id"]
+        if info.get("follower_count") is not None:
+            update["follower_count"] = info["follower_count"]
+        try:
+            await db.accounts.update_one({"_id": ObjectId(key)}, {"$set": update})
+            updated += 1
+        except Exception:  # noqa: BLE001
+            pass
+    logger.info("Enriched %d/%d accounts", updated, len(targets))
+    return updated
 
 
 # ------------------------------------------------------------------
@@ -320,7 +385,11 @@ async def parse_endpoint(payload: ParseIn, user: dict = Depends(get_current_user
 
 
 @acc_router.post("/bulk")
-async def bulk_save(payload: BulkAccountsIn, user: dict = Depends(get_current_user)):
+async def bulk_save(
+    payload: BulkAccountsIn,
+    background: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
     if not payload.accounts:
         return {"inserted": 0, "duplicates": 0, "accounts": []}
     user_id = str(user["_id"])
@@ -347,15 +416,25 @@ async def bulk_save(payload: BulkAccountsIn, user: dict = Depends(get_current_us
             "note": "",
             "created_at": datetime.now(timezone.utc),
             "checked_at": None,
+            "profile_name": None,
+            "profile_username": None,
+            "profile_pic": None,
+            "profile_user_id": None,
+            "follower_count": None,
+            "enriched_at": None,
         })
 
     inserted_accounts: List[dict] = []
+    inserted_oids: list = []
     if to_insert:
         result = await db.accounts.insert_many(to_insert)
-        # fetch to return
-        cursor = db.accounts.find({"_id": {"$in": result.inserted_ids}})
+        inserted_oids = list(result.inserted_ids)
+        cursor = db.accounts.find({"_id": {"$in": inserted_oids}})
         async for doc in cursor:
             inserted_accounts.append(serialize_account(doc))
+
+        # Kick off background enrichment for newly-saved UID accounts
+        background.add_task(enrich_accounts, user_id, inserted_oids)
 
     duplicates = len(payload.accounts) - len(to_insert)
     return {
@@ -467,6 +546,37 @@ async def mock_check(payload: CheckIn, user: dict = Depends(get_current_user)):
         "invalid": invalid_count,
         "accounts": out,
     }
+
+
+@acc_router.post("/enrich")
+async def enrich_endpoint(
+    payload: EnrichIn,
+    user: dict = Depends(get_current_user),
+):
+    """Re-fetch FB profile data for given accounts (or all UID accounts not yet enriched)."""
+    user_id = str(user["_id"])
+    if payload.account_ids:
+        oids = []
+        for s in payload.account_ids:
+            try:
+                oids.append(ObjectId(s))
+            except Exception:
+                continue
+    else:
+        cursor = db.accounts.find(
+            {"user_id": user_id, "type": "uid"},
+            {"_id": 1},
+        )
+        oids = [doc["_id"] async for doc in cursor]
+
+    enriched = await enrich_accounts(user_id, oids)
+
+    # Return the (now-updated) accounts back to the caller
+    cursor = db.accounts.find({"_id": {"$in": oids}, "user_id": user_id})
+    out = []
+    async for doc in cursor:
+        out.append(serialize_account(doc))
+    return {"enriched": enriched, "total": len(oids), "accounts": out}
 
 
 api.include_router(acc_router)

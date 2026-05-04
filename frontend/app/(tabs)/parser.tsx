@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { theme } from "../../src/theme";
 import { Accounts } from "../../src/api";
 import { TerminalSpinner } from "../../src/spinner";
@@ -27,6 +28,7 @@ hacker@protonmail.com:Sup3rS3cret
 type Parsed = { identifier: string; password: string; type: "uid" | "email" };
 
 export default function ParserScreen() {
+  const router = useRouter();
   const [text, setText] = useState("");
   const [parsed, setParsed] = useState<Parsed[]>([]);
   const [duplicatesRemoved, setDuplicatesRemoved] = useState(0);
@@ -76,14 +78,18 @@ export default function ParserScreen() {
     try {
       const res = await Accounts.bulk(parsed);
       setSavingMsg(
-        `Saved ${res.inserted} new account(s) • ${res.duplicates} duplicate(s) skipped`,
+        `Saved ${res.inserted} new account(s) • ${res.duplicates} duplicate(s) skipped • fetching profiles...`,
       );
+      // Auto-jump to Accounts tab so user sees the new records + enrichment results
+      setTimeout(() => {
+        router.push("/(tabs)/accounts");
+      }, 700);
     } catch (e: any) {
       Alert.alert("Save failed", e?.message || "Unknown error");
     } finally {
       setBusy(false);
     }
-  }, [parsed]);
+  }, [parsed, router]);
 
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>

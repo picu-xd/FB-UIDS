@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -8,18 +8,29 @@ import {
   RefreshControl,
   Modal,
   Alert,
+  ToastAndroid,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Slider from "@react-native-community/slider";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "expo-router";
-import { theme, statusColor } from "../../src/theme";
+import * as Clipboard from "expo-clipboard";
+import { theme } from "../../src/theme";
 import { Accounts, Account } from "../../src/api";
-import { StatusBadge } from "../../src/ui";
+import { Avatar } from "../../src/avatar";
 import { TerminalSpinner } from "../../src/spinner";
+import { labelFor, statusColors } from "../../src/status";
 
-const FILTERS = ["all", "pending", "valid", "invalid"] as const;
+const FILTERS = ["all", "valid", "invalid", "pending"] as const;
 type Filter = (typeof FILTERS)[number];
+
+function showToast(msg: string) {
+  if (Platform.OS === "android") {
+    ToastAndroid.show(msg, ToastAndroid.SHORT);
+  }
+  // For iOS / web we silently no-op to avoid blocking; copy still works.
+}
 
 export default function AccountsScreen() {
   const [items, setItems] = useState<Account[]>([]);
@@ -27,16 +38,28 @@ export default function AccountsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [reveal, setReveal] = useState(false);
+  const [reveal, setReveal] = useState(true);
+  const [enriching, setEnriching] = useState(false);
   const [checkOpen, setCheckOpen] = useState(false);
   const [checking, setChecking] = useState(false);
   const [delayMs, setDelayMs] = useState(300);
   const [progress, setProgress] = useState({ done: 0, total: 0, valid: 0, invalid: 0 });
 
+  // Counts for filter chips — based on the FULL set, computed on every load
+  const [counts, setCounts] = useState({ all: 0, valid: 0, invalid: 0, pending: 0 });
+
   const load = useCallback(async () => {
     try {
-      const res = await Accounts.list(filter === "all" ? undefined : filter);
-      setItems(res.accounts);
+      const all = await Accounts.list();
+      const c = { all: all.accounts.length, valid: 0, invalid: 0, pending: 0 };
+      all.accounts.forEach((a) => {
+        if (a.status === "valid") c.valid += 1;
+        else if (a.status === "invalid") c.invalid += 1;
+        else c.pending += 1;
+      });
+      setCounts(c);
+      if (filter === "all") setItems(all.accounts);
+      else setItems(all.accounts.filter((a) => a.status === filter));
     } catch (e: any) {
       Alert.alert("Load failed", e?.message || "Unknown error");
     }
@@ -69,13 +92,22 @@ export default function AccountsScreen() {
     });
   };
 
+  const allSelected = items.length > 0 && selected.size === items.length;
   const toggleSelectAll = () => {
-    if (selected.size === items.length) setSelected(new Set());
+    if (allSelected) setSelected(new Set());
     else setSelected(new Set(items.map((i) => i.id)));
   };
 
-  const onDeleteSelected = async () => {
-    if (!selected.size) return;
+  const copyToClipboard = async (text: string, label: string) => {
+    await Clipboard.setStringAsync(text);
+    showToast(`${label} copied`);
+  };
+
+  const onDeleteSelected = () => {
+    if (!selected.size) {
+      Alert.alert("Nothing selected", "Select cards (long-press) to delete.");
+      return;
+    }
     Alert.alert(
       "Delete?",
       `Remove ${selected.size} account(s)?`,
@@ -99,16 +131,62 @@ export default function AccountsScreen() {
     );
   };
 
+  const onDeleteOne = (id: string) => {
+    Alert.alert(
+      "Delete account?",
+      "This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await Accounts.delete(id);
+              await load();
+            } catch (e: any) {
+              Alert.alert("Delete failed", e?.message || "Unknown error");
+            }
+          },
+        },
+      ],
+      { cancelable: true },
+    );
+  };
+
+  const onEnrichAll = async () => {
+    setEnriching(true);
+    try {
+      const ids = items.filter((i) => i.type === "uid").map((i) => i.id);
+      if (!ids.length) {
+        Alert.alert("No UID accounts", "Profile fetch only works for numeric UIDs.");
+        return;
+      }
+      const res = await Accounts.enrich(ids);
+      Alert.alert(
+        "Profile fetch complete",
+        `Fetched ${res.enriched} of ${res.total} profiles from public data.`,
+      );
+      await load();
+    } catch (e: any) {
+      Alert.alert("Fetch failed", e?.message || "Unknown error");
+    } finally {
+      setEnriching(false);
+    }
+  };
+
   const startCheck = async () => {
-    const targets = selected.size > 0 ? Array.from(selected) : items.map((i) => i.id);
+    const targets =
+      selected.size > 0
+        ? Array.from(selected)
+        : items.map((i) => i.id);
     if (!targets.length) {
-      Alert.alert("Nothing to check", "Select accounts or load some first.");
+      Alert.alert("Nothing to check", "Add or select accounts first.");
       return;
     }
     setChecking(true);
     setProgress({ done: 0, total: targets.length, valid: 0, invalid: 0 });
     try {
-      // chunk requests so we can show progress with delay
       const CHUNK = 5;
       let done = 0,
         valid = 0,
@@ -134,116 +212,201 @@ export default function AccountsScreen() {
 
   const renderItem = ({ item }: { item: Account }) => {
     const isSelected = selected.has(item.id);
-    const c = statusColor(item.status);
+    const c = statusColors(item.status);
+    const displayName =
+      item.profile_name ||
+      (item.type === "email"
+        ? item.identifier.split("@")[0]
+        : `UID ${item.identifier.slice(-6)}`);
+    const subText =
+      item.type === "uid"
+        ? `@${item.profile_username || item.identifier}`
+        : item.identifier;
+
     return (
       <TouchableOpacity
         testID={`account-item-${item.id}`}
         onLongPress={() => toggleSelect(item.id)}
         onPress={() => toggleSelect(item.id)}
-        activeOpacity={0.7}
+        activeOpacity={0.85}
         style={[
-          a.row,
+          ac.row,
           { borderLeftColor: c.border },
-          isSelected && { backgroundColor: theme.accentSoft },
+          isSelected && { backgroundColor: theme.accentSoft, borderColor: theme.accent },
         ]}
       >
-        <View style={a.checkbox}>
-          {isSelected ? (
-            <Ionicons name="checkbox" size={18} color={theme.accent} />
-          ) : (
-            <Ionicons name="square-outline" size={18} color={theme.textMuted} />
-          )}
-        </View>
-        <View style={a.rowMain}>
-          <View style={a.rowTop}>
-            <Text
-              style={[a.idText, { color: item.type === "email" ? theme.cyan : theme.textPrimary }]}
-              numberOfLines={1}
-            >
-              {item.identifier}
+        {/* Top: avatar + name/username + status badge + delete */}
+        <View style={ac.headRow}>
+          <Avatar account={item} size={56} testID={`avatar-${item.id}`} />
+          <View style={ac.nameWrap}>
+            <Text style={ac.nameText} numberOfLines={1} testID={`name-${item.id}`}>
+              {displayName}
             </Text>
-            <StatusBadge status={item.status} testID={`status-${item.id}`} />
+            <Text style={ac.subText} numberOfLines={1}>
+              {subText}
+            </Text>
           </View>
-          <Text style={a.passText} numberOfLines={1}>
-            {reveal ? item.password : "•".repeat(Math.min(item.password.length, 12))}
-            <Text style={a.typeTag}>  · {item.type.toUpperCase()}</Text>
+          <View
+            testID={`status-${item.id}`}
+            style={[
+              ac.badge,
+              { backgroundColor: c.bg, borderColor: c.border },
+            ]}
+          >
+            <Text style={[ac.badgeText, { color: c.text }]}>{labelFor(item.status)}</Text>
+          </View>
+          <TouchableOpacity
+            testID={`delete-${item.id}`}
+            onPress={() => onDeleteOne(item.id)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={ac.delBtn}
+          >
+            <Ionicons name="trash-outline" size={16} color={theme.err} />
+          </TouchableOpacity>
+        </View>
+
+        {/* UID + copy */}
+        <View style={ac.dataRow}>
+          <Text style={ac.dataLabel}>{item.type === "email" ? "EMAIL" : "UID"}</Text>
+          <Text style={[ac.dataVal, { color: theme.accent }]} numberOfLines={1}>
+            {item.identifier}
           </Text>
+          <TouchableOpacity
+            testID={`copy-uid-${item.id}`}
+            onPress={() => copyToClipboard(item.identifier, item.type === "email" ? "Email" : "UID")}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            style={[ac.copyBtn, { borderColor: theme.accent }]}
+          >
+            <Ionicons name="copy-outline" size={14} color={theme.accent} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Password + copy */}
+        <View style={ac.dataRow}>
+          <Text style={ac.dataLabel}>PW</Text>
+          <Text style={[ac.dataVal, { color: theme.warn }]} numberOfLines={1}>
+            {reveal ? item.password : "•".repeat(Math.min(item.password.length, 14))}
+          </Text>
+          <TouchableOpacity
+            testID={`copy-pw-${item.id}`}
+            onPress={() => copyToClipboard(item.password, "Password")}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            style={[ac.copyBtn, { borderColor: theme.warn }]}
+          >
+            <Ionicons name="copy-outline" size={14} color={theme.warn} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Footer: combo (id:pw) + follower count if available */}
+        <View style={ac.footerRow}>
+          <TouchableOpacity
+            testID={`copy-combo-${item.id}`}
+            onPress={() => copyToClipboard(`${item.identifier}:${item.password}`, "Combo")}
+            hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+            style={ac.comboBtn}
+          >
+            <Ionicons name="document-outline" size={11} color={theme.textSecondary} />
+            <Text style={ac.comboText}>COPY ID:PW</Text>
+          </TouchableOpacity>
+          {!!item.follower_count && (
+            <Text style={ac.followers}>
+              {formatCount(item.follower_count)} followers
+            </Text>
+          )}
         </View>
       </TouchableOpacity>
     );
   };
 
   return (
-    <SafeAreaView style={a.safe} edges={["top"]}>
-      <View style={a.headerRow}>
-        <View>
-          <Text style={a.title}>TARGET · DATABASE</Text>
-          <Text style={a.subtitle}>// {items.length} record(s) loaded</Text>
-        </View>
-        <TouchableOpacity testID="reveal-toggle" onPress={() => setReveal((v) => !v)}>
-          <Ionicons name={reveal ? "eye-off-outline" : "eye-outline"} size={22} color={theme.accent} />
-        </TouchableOpacity>
-      </View>
-
-      {/* Filters */}
-      <View style={a.filters}>
-        {FILTERS.map((f) => (
-          <TouchableOpacity
-            key={f}
-            testID={`filter-${f}`}
-            onPress={() => setFilter(f)}
-            activeOpacity={0.7}
-            style={[a.chip, filter === f && a.chipActive]}
-          >
-            <Text style={[a.chipText, filter === f && a.chipTextActive]}>{f.toUpperCase()}</Text>
+    <SafeAreaView style={ac.safe} edges={["top"]}>
+      {/* Sticky Header */}
+      <View style={ac.stickyHeader}>
+        <View style={ac.titleRow}>
+          <View>
+            <Text style={ac.title}>TARGET · DATABASE</Text>
+            <Text style={ac.subtitle}>// {counts.all} record(s) · tap card to select</Text>
+          </View>
+          <TouchableOpacity testID="reveal-toggle" onPress={() => setReveal((v) => !v)}>
+            <Ionicons name={reveal ? "eye-outline" : "eye-off-outline"} size={22} color={theme.accent} />
           </TouchableOpacity>
-        ))}
-      </View>
+        </View>
 
-      {/* Bulk actions */}
-      <View style={a.bulkRow}>
-        <TouchableOpacity
-          testID="select-all-btn"
-          onPress={toggleSelectAll}
-          activeOpacity={0.7}
-          style={a.bulkBtn}
-        >
-          <Text style={a.bulkBtnText}>
-            {selected.size === items.length && items.length > 0 ? "UNSELECT ALL" : "SELECT ALL"}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          testID="open-check-btn"
-          onPress={() => setCheckOpen(true)}
-          activeOpacity={0.7}
-          style={[a.bulkBtn, a.checkBtn]}
-        >
-          <Ionicons name="play" size={12} color={theme.accent} />
-          <Text style={[a.bulkBtnText, { color: theme.accent }]}>
-            CHECK {selected.size > 0 ? `(${selected.size})` : "ALL"}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          testID="bulk-delete-btn"
-          onPress={onDeleteSelected}
-          disabled={selected.size === 0}
-          activeOpacity={0.7}
-          style={[a.bulkBtn, a.deleteBtn, selected.size === 0 && { opacity: 0.4 }]}
-        >
-          <Ionicons name="trash-outline" size={12} color={theme.err} />
-          <Text style={[a.bulkBtnText, { color: theme.err }]}>DEL {selected.size}</Text>
-        </TouchableOpacity>
+        {/* Sticky action row */}
+        <View style={ac.stickyActions}>
+          <ActionButton
+            testID="action-fetch"
+            label={enriching ? "FETCHING..." : "FETCH INFO"}
+            icon="cloud-download-outline"
+            color={theme.cyan}
+            onPress={onEnrichAll}
+            disabled={enriching}
+          />
+          <ActionButton
+            testID="action-check"
+            label={selected.size > 0 ? `CHECK ${selected.size}` : "CHECK ALL"}
+            icon="play"
+            color={theme.accent}
+            onPress={() => setCheckOpen(true)}
+          />
+          <ActionButton
+            testID="action-select-all"
+            label={allSelected ? "UNSEL." : "SEL. ALL"}
+            icon="checkbox-outline"
+            color={theme.textSecondary}
+            onPress={toggleSelectAll}
+          />
+          <ActionButton
+            testID="action-delete"
+            label={`DEL ${selected.size}`}
+            icon="trash-outline"
+            color={theme.err}
+            onPress={onDeleteSelected}
+            disabled={selected.size === 0}
+          />
+        </View>
+
+        {/* Filter chips with counts */}
+        <View style={ac.filters}>
+          <FilterChip
+            testID="filter-all"
+            active={filter === "all"}
+            label={`ALL ${counts.all}`}
+            onPress={() => setFilter("all")}
+          />
+          <FilterChip
+            testID="filter-valid"
+            active={filter === "valid"}
+            label={`LIVE ${counts.valid}`}
+            color={theme.ok}
+            onPress={() => setFilter("valid")}
+          />
+          <FilterChip
+            testID="filter-invalid"
+            active={filter === "invalid"}
+            label={`DIE ${counts.invalid}`}
+            color={theme.err}
+            onPress={() => setFilter("invalid")}
+          />
+          <FilterChip
+            testID="filter-pending"
+            active={filter === "pending"}
+            label={`PENDING ${counts.pending}`}
+            color={theme.warn}
+            onPress={() => setFilter("pending")}
+          />
+        </View>
       </View>
 
       {/* List */}
       {loading ? (
-        <View style={a.empty}>
+        <View style={ac.empty}>
           <TerminalSpinner label="LOADING DATA" />
         </View>
       ) : items.length === 0 ? (
-        <View style={a.empty}>
+        <View style={ac.empty}>
           <Ionicons name="folder-open-outline" size={36} color={theme.textMuted} />
-          <Text style={a.emptyText}>// no records — head to Parser to add some</Text>
+          <Text style={ac.emptyText}>// no records — head to Parser to add some</Text>
         </View>
       ) : (
         <FlatList
@@ -270,23 +433,23 @@ export default function AccountsScreen() {
         animationType="slide"
         onRequestClose={() => !checking && setCheckOpen(false)}
       >
-        <View style={a.modalRoot}>
+        <View style={ac.modalRoot}>
           <TouchableOpacity
-            style={a.modalBackdrop}
+            style={ac.modalBackdrop}
             activeOpacity={1}
             onPress={() => !checking && setCheckOpen(false)}
           />
-          <View style={a.sheet}>
-            <View style={a.sheetHandle} />
-            <Text style={a.sheetTitle}>$ mock-check</Text>
-            <Text style={a.sheetCaption}>
+          <View style={ac.sheet}>
+            <View style={ac.sheetHandle} />
+            <Text style={ac.sheetTitle}>$ mock-check</Text>
+            <Text style={ac.sheetCaption}>
               // simulated validation — runs locally, no real FB calls
             </Text>
 
-            <View style={a.field}>
-              <View style={a.fieldHead}>
-                <Text style={a.fieldLabel}>DELAY BETWEEN BATCHES</Text>
-                <Text style={a.fieldVal}>{delayMs} ms</Text>
+            <View style={ac.field}>
+              <View style={ac.fieldHead}>
+                <Text style={ac.fieldLabel}>DELAY BETWEEN BATCHES</Text>
+                <Text style={ac.fieldVal}>{delayMs} ms</Text>
               </View>
               <Slider
                 testID="mock-check-slider"
@@ -303,52 +466,46 @@ export default function AccountsScreen() {
             </View>
 
             {checking || progress.done > 0 ? (
-              <View style={a.progressBox}>
-                <Text style={a.progressLine}>
+              <View style={ac.progressBox}>
+                <Text style={ac.progressLine}>
                   [progress] {progress.done} / {progress.total}
                 </Text>
-                <View style={a.progressTrack}>
+                <View style={ac.progressTrack}>
                   <View
                     style={[
-                      a.progressFill,
-                      {
-                        width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%`,
-                      },
+                      ac.progressFill,
+                      { width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` },
                     ]}
                   />
                 </View>
-                <View style={a.progressStats}>
-                  <Text style={[a.progressLine, { color: theme.ok }]}>
-                    valid: {progress.valid}
-                  </Text>
-                  <Text style={[a.progressLine, { color: theme.err }]}>
-                    invalid: {progress.invalid}
-                  </Text>
+                <View style={ac.progressStats}>
+                  <Text style={[ac.progressLine, { color: theme.ok }]}>LIVE: {progress.valid}</Text>
+                  <Text style={[ac.progressLine, { color: theme.err }]}>DIE: {progress.invalid}</Text>
                 </View>
               </View>
             ) : null}
 
-            <View style={a.sheetActions}>
+            <View style={ac.sheetActions}>
               <TouchableOpacity
                 testID="modal-close-btn"
                 onPress={() => !checking && setCheckOpen(false)}
                 disabled={checking}
                 activeOpacity={0.7}
-                style={a.sheetGhost}
+                style={ac.sheetGhost}
               >
-                <Text style={a.sheetGhostText}>{checking ? "RUNNING..." : "CLOSE"}</Text>
+                <Text style={ac.sheetGhostText}>{checking ? "RUNNING..." : "CLOSE"}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 testID="modal-start-check-btn"
                 onPress={startCheck}
                 disabled={checking}
                 activeOpacity={0.7}
-                style={[a.sheetPrimary, checking && { opacity: 0.5 }]}
+                style={[ac.sheetPrimary, checking && { opacity: 0.5 }]}
               >
                 {checking ? (
                   <TerminalSpinner label="CHECKING" />
                 ) : (
-                  <Text style={a.sheetPrimaryText}>▶ START CHECK</Text>
+                  <Text style={ac.sheetPrimaryText}>▶ START CHECK</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -359,85 +516,168 @@ export default function AccountsScreen() {
   );
 }
 
-const a = StyleSheet.create({
+function ActionButton({
+  testID,
+  label,
+  icon,
+  color,
+  onPress,
+  disabled,
+}: {
+  testID: string;
+  label: string;
+  icon: any;
+  color: string;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      testID={testID}
+      onPress={onPress}
+      disabled={disabled}
+      activeOpacity={0.7}
+      style={[
+        ac.actionBtn,
+        { borderColor: color },
+        disabled && { opacity: 0.4 },
+      ]}
+    >
+      <Ionicons name={icon} size={12} color={color} />
+      <Text style={[ac.actionText, { color }]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function FilterChip({
+  testID,
+  active,
+  label,
+  color = theme.accent,
+  onPress,
+}: {
+  testID: string;
+  active: boolean;
+  label: string;
+  color?: string;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      testID={testID}
+      onPress={onPress}
+      activeOpacity={0.7}
+      style={[
+        ac.chip,
+        { borderColor: active ? color : theme.borderNeutral },
+        active && { backgroundColor: `${color}22` },
+      ]}
+    >
+      <Text style={[ac.chipText, { color: active ? color : theme.textMuted }]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function formatCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+const ac = StyleSheet.create({
   safe: { flex: 1, backgroundColor: theme.bg },
-  headerRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: 16,
-    paddingBottom: 8,
-  },
-  title: {
-    fontFamily: theme.mono,
-    color: theme.accent,
-    fontSize: 20,
-    fontWeight: "700",
-    letterSpacing: 3,
-  },
-  subtitle: { fontFamily: theme.mono, color: theme.textMuted, fontSize: 11, letterSpacing: 1 },
-  filters: {
-    flexDirection: "row",
-    gap: 6,
+  stickyHeader: {
+    backgroundColor: theme.bg,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.borderDim,
     paddingHorizontal: 12,
-    paddingBottom: 8,
+    paddingTop: 8,
+    paddingBottom: 10,
+    gap: 10,
   },
-  chip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 2,
-    borderWidth: 1,
-    borderColor: theme.borderNeutral,
-  },
-  chipActive: {
-    backgroundColor: theme.accentSoft,
-    borderColor: theme.accent,
-  },
-  chipText: { fontFamily: theme.mono, color: theme.textMuted, fontSize: 10, letterSpacing: 1.2 },
-  chipTextActive: { color: theme.accent },
-  bulkRow: {
-    flexDirection: "row",
-    paddingHorizontal: 12,
-    paddingBottom: 8,
-    gap: 6,
-  },
-  bulkBtn: {
+  titleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  title: { fontFamily: theme.mono, color: theme.accent, fontSize: 18, fontWeight: "700", letterSpacing: 2.5 },
+  subtitle: { fontFamily: theme.mono, color: theme.textMuted, fontSize: 10, letterSpacing: 1 },
+  stickyActions: { flexDirection: "row", gap: 6 },
+  actionBtn: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 8,
+    paddingHorizontal: 4,
     borderWidth: 1,
-    borderColor: theme.borderNeutral,
     borderRadius: 2,
     gap: 4,
   },
-  checkBtn: { borderColor: theme.accent, backgroundColor: theme.accentSoft },
-  deleteBtn: { borderColor: theme.err, backgroundColor: theme.errSoft },
-  bulkBtnText: {
-    fontFamily: theme.mono,
-    color: theme.textSecondary,
-    fontSize: 10,
-    letterSpacing: 1.2,
-    fontWeight: "700",
-  },
+  actionText: { fontFamily: theme.mono, fontSize: 9, letterSpacing: 1, fontWeight: "700" },
+  filters: { flexDirection: "row", gap: 6 },
+  chip: { flex: 1, paddingHorizontal: 6, paddingVertical: 6, borderRadius: 2, borderWidth: 1, alignItems: "center" },
+  chipText: { fontFamily: theme.mono, fontSize: 10, letterSpacing: 1, fontWeight: "700" },
   empty: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10 },
   emptyText: { fontFamily: theme.mono, color: theme.textMuted, fontSize: 12 },
+  // Card
   row: {
-    flexDirection: "row",
     backgroundColor: theme.panel,
     borderLeftWidth: 3,
-    borderRadius: 2,
-    padding: 12,
-    alignItems: "center",
-    gap: 12,
+    borderWidth: 1,
+    borderColor: theme.borderDim,
+    borderRadius: 3,
+    padding: 10,
+    gap: 6,
   },
-  checkbox: { width: 22, alignItems: "center" },
-  rowMain: { flex: 1 },
-  rowTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  idText: { fontFamily: theme.mono, fontSize: 13, fontWeight: "600", flex: 1 },
-  passText: { fontFamily: theme.mono, color: theme.textMuted, fontSize: 11, marginTop: 4 },
-  typeTag: { color: theme.textMuted, fontSize: 10, letterSpacing: 1 },
+  headRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  nameWrap: { flex: 1 },
+  nameText: { fontFamily: theme.mono, color: theme.textPrimary, fontSize: 13, fontWeight: "700" },
+  subText: { fontFamily: theme.mono, color: theme.textMuted, fontSize: 10, marginTop: 2 },
+  badge: { paddingHorizontal: 6, paddingVertical: 3, borderRadius: 2, borderWidth: 1 },
+  badgeText: { fontFamily: theme.mono, fontSize: 9, fontWeight: "700", letterSpacing: 1 },
+  delBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 2,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: theme.errSoft,
+  },
+  dataRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  dataLabel: {
+    fontFamily: theme.mono,
+    color: theme.textMuted,
+    fontSize: 9,
+    letterSpacing: 1,
+    width: 36,
+  },
+  dataVal: { flex: 1, fontFamily: theme.mono, fontSize: 12 },
+  copyBtn: {
+    width: 26,
+    height: 26,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 2,
+    borderWidth: 1,
+  },
+  footerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 2,
+  },
+  comboBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 2,
+    borderWidth: 1,
+    borderColor: theme.borderNeutral,
+    borderStyle: "dashed",
+  },
+  comboText: { fontFamily: theme.mono, fontSize: 9, color: theme.textSecondary, letterSpacing: 1 },
+  followers: { fontFamily: theme.mono, fontSize: 10, color: theme.textMuted },
+  // Modal
   modalRoot: { flex: 1, justifyContent: "flex-end" },
   modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.7)" },
   sheet: {
@@ -493,10 +733,5 @@ const a = StyleSheet.create({
     borderColor: theme.accent,
     alignItems: "center",
   },
-  sheetPrimaryText: {
-    fontFamily: theme.mono,
-    color: theme.accent,
-    fontWeight: "700",
-    letterSpacing: 2,
-  },
+  sheetPrimaryText: { fontFamily: theme.mono, color: theme.accent, fontWeight: "700", letterSpacing: 2 },
 });

@@ -88,6 +88,12 @@ export type Account = {
   note: string;
   created_at: string | null;
   checked_at: string | null;
+  profile_name: string | null;
+  profile_username: string | null;
+  profile_pic: string | null;
+  profile_user_id: string | null;
+  follower_count: number | null;
+  enriched_at: string | null;
 };
 
 export type Stats = {
@@ -137,6 +143,11 @@ export const Accounts = {
     api<{ checked: number; valid: number; invalid: number; accounts: Account[] }>("/accounts/check", {
       method: "POST",
       body: { account_ids: ids },
+    }),
+  enrich: (ids?: string[]) =>
+    api<{ enriched: number; total: number; accounts: Account[] }>("/accounts/enrich", {
+      method: "POST",
+      body: { account_ids: ids ?? null },
     }),
 };
 

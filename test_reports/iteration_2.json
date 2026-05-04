@@ -1,0 +1,67 @@
+{
+  "summary": "Iteration 2 verified end-to-end. Backend: 23/23 pytest tests passing (4 new enrichment tests + 19 regression). FB OG enrichment for UID 4 returns Mark Zuckerberg name + profile pic (https) + 121.4M followers in <5s; bulk save kicks off background enrichment; /enrich endpoint works for both 'all' and specific account_ids; bogus UIDs are handled gracefully (no 500). Frontend: After fixing a CRITICAL ReferenceError in parser.tsx (`router` was used without `const router = useRouter()`), full flow works on the public Expo URL — login → parser → save → auto-navigate to /accounts with 'fetching profiles...' message → enriched cards render with 56px avatars (real FB photos for public UIDs, deterministic colored initials fallback otherwise). Filter chips correctly show 'ALL 31 / LIVE 22 / DIE 6 / PENDING 3'; status badges render LIVE/DIE/PENDING; sticky action bar has FETCH INFO/CHECK ALL/SEL.ALL/DEL; reveal toggle masks/un-masks all passwords; per-card UID/PW/COMBO copy buttons all present; 'COPY ID:PW' is dashed. Stats screen shows LIVE/DIE/PENDING/CHECKING tiles (testIDs stat-valid/stat-invalid map to LIVE/DIE labels, intentional).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "app/(tabs)/parser.tsx",
+        "issue": "FIXED by testing agent: `useRouter` was imported but never invoked, so `router.push('/(tabs)/accounts')` inside onSave threw 'ReferenceError: router is not defined' and crashed the screen with a red-box error. Added `const router = useRouter();` at top of ParserScreen. Verified flow works: save now auto-navigates to /accounts within ~700ms.",
+        "testID": "parser-save-btn",
+        "priority": "CRITICAL (already fixed)"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "stats — recent activity",
+        "issues": [
+          "Recent activity log entries render as 'CHECK → VALID' / 'CHECK → INVALID' (raw DB values) but the iteration-2 spec expected 'CHECK → LIVE' / 'CHECK → DIE'. Tile counters and chips are correctly relabeled — only the activity log lines were missed. Fix: in stats.tsx wrap `result` through labelFor() before rendering."
+        ]
+      },
+      {
+        "screen": "tabs bar (web)",
+        "issues": [
+          "Bottom tab buttons do not expose `data-testid` (`tab-parser`, `tab-accounts`, `tab-stats`, `tab-settings`) on web. Tabs are reachable visually and via Expo Router URL, but automated tests have to fall back to coordinate clicks. Likely cause: `<Tabs.Screen options={{ tabBarTestID: 'tab-...' }}>` is not set, or testID is not propagated by react-navigation's bottom-tab on web. Add `tabBarButtonTestID` (or wrap tabBarButton) for web compatibility."
+        ]
+      }
+    ],
+    "react_native_issues": [
+      {
+        "component": "RN warning",
+        "issue": "Console still warns 'props.pointerEvents is deprecated. Use style.pointerEvents' — coming from a dependency, non-blocking (carried over from iter 1)."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_fb_checker_api.py",
+    "/app/backend/tests/test_enrichment.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Re-label Recent Activity entries on Stats screen: replace raw status with labelFor(status) so the log reads 'CHECK → LIVE' / 'CHECK → DIE' instead of 'CHECK → VALID' / 'CHECK → INVALID'.",
+    "Add data-testid to bottom tabs (tab-parser/tab-accounts/tab-stats/tab-settings) so automated tests don't need coordinate clicks. In Tabs.Screen options use `tabBarButtonTestID` or render a custom tabBarButton wrapping with testID. Currently only inner icons/labels render; the tab buttons themselves have no testID on web.",
+    "OPTIONAL: Tab is labeled 'SYSTEM' but spec calls it 'Settings' — naming nit carried over from iter 1.",
+    "OPTIONAL: Pin expo-clipboard to ~8.0.8 to silence Expo SDK warning ('expo-clipboard@55.0.13 - expected version: ~8.0.8'). Functional today."
+  ],
+  "critical_code_review_comments": [
+    "FIXED — parser.tsx missed `const router = useRouter();` despite using `router.push(...)` in onSave (and `router` was listed as a useCallback dep). Without this fix the entire Parser screen red-screened on render.",
+    "stats.tsx renders recent_activity[].result raw — should pass through labelFor() helper used elsewhere.",
+    "_layout.tsx tabs need testID propagation (no `tabBarButtonTestID` set, so web tests can't address tabs by data-testid)."
+  ],
+  "updated_files": [
+    "/app/frontend/app/(tabs)/parser.tsx (added `const router = useRouter();` to ParserScreen)",
+    "/app/backend/tests/test_enrichment.py (created — 4 enrichment tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (23/23)",
+    "frontend": "~93% — every iteration-2 feature verified except 'CHECK → LIVE/DIE' wording on stats activity log"
+  },
+  "seed_data_creation": "Tests register transient users via /api/auth/register (emails like enrich_<8hex>@test.com, test_<8hex>@test.com). Each test class cleans up by deleting its accounts. UI test reused the seeded admin account and wrote a few accounts (incl. UID 4) into admin's account list — these can be removed via the SEL ALL → DEL action if a clean slate is desired.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend public URL is set in /app/frontend/.env as EXPO_PUBLIC_BACKEND_URL=https://mobile-auth-19.preview.emergentagent.com. Run pytest with `pytest /app/backend/tests/ -v`. Backend logs confirm enrichment is hitting m.facebook.com and parsing OG metadata (e.g., 'Enriched 22/26 accounts'). UID 4 (Mark Zuckerberg) is a reliable enrichment target — its profile is public and returns name + profile_pic + 121,418,842 followers. Frontend bottom tabs do not have testIDs on web, so navigate either by `page.mouse.click(x,y)` (PARSER≈48,815 / ACCOUNTS≈146,815 / STATS≈244,815 / SYSTEM≈342,815 at 390×844) or by URL push (/parser, /accounts, /stats, /settings).",
+  "rca_of_issue": "BUG (fixed): ParserScreen red-screened with 'ReferenceError: router is not defined'. RCA: parser.tsx imported `useRouter` from expo-router and listed `router` as a useCallback dependency, but never called the hook to get a router instance — `router.push(...)` referenced a free variable. Repro: log in → tap Parser tab → tap PARSE & DEDUPE → tap SAVE → red-screen. Fix: add `const router = useRouter();` at the top of ParserScreen. Applied in this iteration; verified that save now navigates to /accounts and shows 'fetching profiles...' inline message."
+}

@@ -83,9 +83,9 @@ export default function StatsScreen() {
 
         {/* Status grid */}
         <View style={s.grid}>
-          <Widget label="VALID" value={data.by_status.valid} color={theme.ok} testID="stat-valid" />
+          <Widget label="LIVE" value={data.by_status.valid} color={theme.ok} testID="stat-valid" />
           <Widget
-            label="INVALID"
+            label="DIE"
             value={data.by_status.invalid}
             color={theme.err}
             testID="stat-invalid"
@@ -113,8 +113,8 @@ export default function StatsScreen() {
             <View style={[s.ratioSeg, { backgroundColor: theme.warn, flex: pendingPct }]} />
           </View>
           <View style={s.ratioLegend}>
-            <LegendDot color={theme.ok} label={`valid ${validPct}%`} />
-            <LegendDot color={theme.err} label={`invalid ${invalidPct}%`} />
+            <LegendDot color={theme.ok} label={`live ${validPct}%`} />
+            <LegendDot color={theme.err} label={`die ${invalidPct}%`} />
             <LegendDot color={theme.warn} label={`pending ${pendingPct}%`} />
           </View>
         </View>
