@@ -139,14 +139,14 @@ class TestParser:
         r = requests.post(f"{API}/accounts/parse", headers=user_headers, json={"text": self.SAMPLE}, timeout=30)
         assert r.status_code == 200, r.text
         data = r.json()
-        # NOTE: parser is greedy — "Spam line ignored" is captured as identifier="Spam", password="line"
-        # because the UID classifier accepts any [A-Za-z0-9._]{4,}. This is a parser-quality issue.
-        # Documented in test_report. Effective unique parses = 6 (5 real + 1 false-positive "Spam").
-        assert data["count"] == 6, f"got {data['count']}: {data['accounts']}"
+        # Parser correctly extracts 5 valid pairs (skips "Spam line ignored", dedupes
+        # the repeated 100012345678:abc123 line).
+        assert data["count"] == 5, f"got {data['count']}: {data['accounts']}"
         idents = [a["identifier"] for a in data["accounts"]]
         assert "user@gmail.com" in idents
         assert "hacker@protonmail.com" in idents
         assert "100012345678" in idents
+        assert "Spam" not in idents  # noise must NOT be classified as a UID
         # Type classification
         types = {a["identifier"]: a["type"] for a in data["accounts"]}
         assert types["user@gmail.com"] == "email"

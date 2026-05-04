@@ -46,7 +46,7 @@ logger = logging.getLogger("fb_checker")
 # ------------------------------------------------------------------
 # DB
 # ------------------------------------------------------------------
-client = AsyncIOMotorClient(MONGO_URL)
+client = AsyncIOMotorClient(MONGO_URL, tz_aware=True)
 db = client[DB_NAME]
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -208,8 +208,6 @@ def _classify_identifier(identifier: str) -> Optional[str]:
     if EMAIL_RE.fullmatch(identifier):
         return "email"
     if UID_RE.fullmatch(identifier):
-        return "uid"
-    if re.fullmatch(r"[A-Za-z0-9._]{4,}", identifier):
         return "uid"
     return None
 
