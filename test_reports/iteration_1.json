@@ -1,0 +1,63 @@
+{
+  "summary": "Backend: 18/19 pytest tests passing. 1 CRITICAL bug found in brute-force protection (timezone-aware vs naive datetime crash → HTTP 500 instead of 429). Parser has minor quality issue: accepts plain words like 'Spam' as UIDs. Frontend: login → parse → save → stats flow works correctly via mobile viewport on the public Expo URL; UI renders with the dark terminal theme; sticky save CTA, found-count, parser preview, stats dashboard all functional.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/auth/login",
+        "issue": "Brute-force protection crashes after 5 failed attempts. server.py:139 compares `locked_until` (naive datetime read back from MongoDB) with `datetime.now(timezone.utc)` (tz-aware) → `TypeError: can't compare offset-naive and offset-aware datetimes`. Result: 500 response instead of 429. Confirmed in /var/log/supervisor/backend.err.log traceback.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/accounts/parse",
+        "issue": "Parser greedily accepts any 4+ char alpha token as a UID via regex `[A-Za-z0-9._]{4,}`. Lines like 'Spam line ignored' are parsed as identifier='Spam', password='line'. Lines with prefix 'duplicate100012345678:abc123' are parsed as identifier='duplicate100012345678' (a literal substring concat) instead of being deduped against '100012345678'. Parser quality could be tightened (e.g., require digits-only for uid OR a known structure for usernames; treat words from common English dictionary as noise)."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "tabs bar",
+        "issues": [
+          "PRD/test-spec calls the last tab 'Settings' but the tab is labeled 'SYSTEM' in the UI (file is settings.tsx). Naming inconsistency only — functional logout works via that screen."
+        ]
+      }
+    ],
+    "react_native_issues": [
+      {
+        "component": "RN warning",
+        "issue": "Console warns: 'props.pointerEvents is deprecated. Use style.pointerEvents'. Coming from a dependency, non-blocking."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_fb_checker_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "FIX (CRITICAL): In backend/server.py `check_brute_force`, normalise `locked_until` to tz-aware before compare. Either set `tz_aware=True` on the Motor client (`AsyncIOMotorClient(MONGO_URL, tz_aware=True)`) OR coerce: `locked_until = locked_until.replace(tzinfo=timezone.utc) if locked_until and locked_until.tzinfo is None else locked_until`. After fix, brute-force test will return 429 instead of 500.",
+    "OPTIONAL: Tighten parser regex to filter common English words / require digits in the UID classifier branch, OR drop the alphanumeric fallback `[A-Za-z0-9._]{4,}` so only true UIDs (digits) and emails are accepted. Alternative: blacklist purely-alphabetic tokens.",
+    "OPTIONAL: Decide naming for the last tab — either rename UI label from 'SYSTEM' to 'SETTINGS' or update PRD wording. Functionality is fine."
+  ],
+  "critical_code_review_comments": [
+    "server.py:139 — naive vs aware datetime comparison bug (root cause documented above).",
+    "server.py:212 — UID classifier regex too permissive: accepts any alpha token of length >=4.",
+    "server.py:563 — CORS allow_origins=['*'] with allow_credentials=False is fine for Bearer-token mobile, but for safety could be tightened to the Expo public origin."
+  ],
+  "updated_files": [
+    "/app/backend/tests/__init__.py (created)",
+    "/app/backend/tests/test_fb_checker_api.py (created — 19 pytest tests)"
+  ],
+  "success_rate": {
+    "backend": "94.7% (18/19)",
+    "frontend": "100% on smoke (login, parser parse+save, accounts tab, stats tab — total/by_type correct)"
+  },
+  "seed_data_creation": "Tests create transient users via /api/auth/register (TEST_ prefix not applied; emails like test_<8hex>@test.com). Each TestAccountsFlow run inserts and deletes its 3 accounts on a fresh user — clean. No production seed touched. Admin (admin@fbchecker.com/admin123) is auto-seeded by lifespan.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend public URL is https://mobile-auth-19.preview.emergentagent.com (set in /app/frontend/.env as EXPO_PUBLIC_BACKEND_URL). Tests in /app/backend/tests/test_fb_checker_api.py, run with `pytest /app/backend/tests/ -v`. K8s ingress here load-balances upstream IPs (you'll see two source IPs in backend logs), so per-IP brute-force counters are split — test sends 12 attempts to ensure threshold is hit. After fix, expect 429 in statuses, not 500.",
+  "rca_of_issue": "BUG: brute-force lockout returns 500. RCA: Motor (AsyncIOMotorClient) returns datetimes without timezone info by default. `record_failed_attempt` writes `datetime.now(timezone.utc)` (aware) but the BSON layer stores it as UTC and reads it back as naive. Then `check_brute_force` compares naive `locked_until` > aware `datetime.now(timezone.utc)` → TypeError → 500 (FastAPI returns generic 500 because not caught by HTTPException handler). REPRO: 5 wrong logins from same upstream IP → 6th login crashes. MITIGATION: (a) `client = AsyncIOMotorClient(MONGO_URL, tz_aware=True)` is the cleanest fix, OR (b) explicitly: `if locked_until and (locked_until.tzinfo is None and locked_until.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc)) or (locked_until and locked_until.tzinfo and locked_until > datetime.now(timezone.utc)):`."
+}
