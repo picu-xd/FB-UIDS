@@ -31,7 +31,8 @@ A React Native (Expo) mobile app that recreates the **FB Checker control room** 
 - `POST /api/auth/register|login|logout` — JWT auth
 - `GET  /api/auth/me`
 - `POST /api/accounts/parse` — extract pairs from messy text
-- `POST /api/accounts/bulk` — save de-duplicated parsed accounts (per user)
+- `POST /api/accounts/bulk` — save de-duplicated accounts (per user) + auto-trigger background enrichment
+- `POST /api/accounts/enrich` — re-fetch FB public profile data (name, profile picture, follower count) for given accounts
 - `GET  /api/accounts?status=...` — list user accounts
 - `DELETE /api/accounts/{id}` — delete one
 - `POST /api/accounts/bulk-delete` — bulk delete
@@ -40,16 +41,20 @@ A React Native (Expo) mobile app that recreates the **FB Checker control room** 
 
 ## Data Model (MongoDB)
 - `users { email, password_hash, name, role, created_at }` — unique index on email
-- `accounts { user_id, identifier, password, type, status, note, created_at, checked_at }` — index on (user_id, created_at)
+- `accounts { user_id, identifier, password, type, status, note, created_at, checked_at, profile_name, profile_username, profile_pic, profile_user_id, follower_count, enriched_at }` — index on (user_id, created_at)
 - `login_attempts { identifier, count, locked_until }` — brute-force protection
 - `activity_log { user_id, type, account_id, result, ts }`
 
-## Key UX Details
+## Key UX Details (v2)
 - Pre-filled login (admin@fbchecker.com / admin123) for instant demo
-- Sticky **Save N Accounts** CTA appears after parsing
-- Mock check sheet has 0–2000 ms inter-batch delay slider + live progress bar
-- Status filter chips: ALL / PENDING / VALID / INVALID
-- Eye-toggle on Accounts screen reveals or masks passwords
+- **Status rename**: `valid → LIVE`, `invalid → DIE` everywhere in the UI (DB values unchanged for backwards compatibility)
+- **Filter chips with live counts**: `ALL N / LIVE N / DIE N / PENDING N`
+- **Compact account cards** with 56px circular avatar — real FB profile photo when available, deterministic colored initials fallback otherwise
+- **Sticky action bar** (always visible while scrolling): FETCH INFO / CHECK ALL / SEL ALL / DEL N
+- **Color-coded copy buttons** on each card — UID (green), Password (amber), dashed COPY ID:PW combo
+- **Auto-navigate** to Accounts tab after Parser save (so user immediately sees enrichment results loading in)
+- Mock check sheet has 0–2000 ms inter-batch delay slider + live progress bar (LIVE/DIE counters)
+- Eye-toggle on Accounts header reveals/masks ALL passwords at once
 - Pull-to-refresh on Accounts and Stats
 - Brute-force lockout after 5 failed login attempts (15 min)
 

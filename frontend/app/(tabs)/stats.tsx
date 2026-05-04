@@ -133,9 +133,15 @@ export default function StatsScreen() {
                   : a.result === "invalid"
                   ? theme.err
                   : theme.textPrimary;
+              const resultLabel =
+                a.result === "valid"
+                  ? "LIVE"
+                  : a.result === "invalid"
+                  ? "DIE"
+                  : a.result.toUpperCase();
               return (
                 <Text key={i} style={[s.activityLine, { color }]} numberOfLines={1}>
-                  [{ts}] {a.type.toUpperCase()} → {a.result.toUpperCase()}
+                  [{ts}] {a.type.toUpperCase()} → {resultLabel}
                 </Text>
               );
             })

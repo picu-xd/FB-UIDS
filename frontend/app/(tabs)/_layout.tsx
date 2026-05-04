@@ -56,7 +56,7 @@ export default function TabsLayout() {
         options={{
           title: "Parser",
           tabBarIcon: ParserIcon,
-          tabBarTestID: "tab-parser",
+          tabBarButtonTestID: "tab-parser",
         }}
       />
       <Tabs.Screen
@@ -64,7 +64,7 @@ export default function TabsLayout() {
         options={{
           title: "Accounts",
           tabBarIcon: AccountsIcon,
-          tabBarTestID: "tab-accounts",
+          tabBarButtonTestID: "tab-accounts",
         }}
       />
       <Tabs.Screen
@@ -72,15 +72,15 @@ export default function TabsLayout() {
         options={{
           title: "Stats",
           tabBarIcon: StatsIcon,
-          tabBarTestID: "tab-stats",
+          tabBarButtonTestID: "tab-stats",
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
-          title: "System",
+          title: "Settings",
           tabBarIcon: SettingsIcon,
-          tabBarTestID: "tab-settings",
+          tabBarButtonTestID: "tab-settings",
         }}
       />
     </Tabs>
